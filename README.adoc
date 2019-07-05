@@ -1,0 +1,203 @@
+= Introduction
+
+There appears to be some issue on Windows involving native-image binaries of Clojure programs that try to read from standard input.  (In contrast, this does not appear to occur for analogous situations under Linux distributions.)
+
+Consider the following code:
+
+```
+(ns script
+  (:gen-class))
+
+(defn -main [& args]
+  (println "started")
+  (slurp *in*)
+  (println "finished"))
+```
+
+This is supposed to print some output, read from standard input, and then print some more output.
+
+It's not clear what the exact circumstances are, but of 4 shells tried (cmd.exe, the Windows SDK command prompt, Windows PowerShell, and PowerShell Core), some of them sometimes yield stacktraces after the initial output.  For example, for the invocation:
+
+```
+type project.clj | ./constdin.exe
+```
+
+one might see:
+
+```
+started
+Exception in thread "System-2" java.io.IOException: The handle is invalid
+        at com.oracle.svm.jni.JNIJavaCallWrappers.jniInvoke_VA_LIST:Ljava_io_IOException_2_0002e_0003cinit_0003e_00028Ljava_lang_String_2_00029V(JNIJavaCallWrappers.java:0)
+        at java.io.FileInputStream.readBytes(FileInputStream.java)
+        at java.io.FileInputStream.read(FileInputStream.java:255)
+        ...
+```
+
+instead of the expected:
+
+```
+started
+finished
+```
+
+(See below for full trace.)
+
+The following is what is used on Windows to build the native-image binary:
+
+```
+call lein do, clean uberjar
+
+%GRAALVM_HOME%\bin\native-image.cmd ^
+  -jar target\constdin-0.0.1-standalone.jar ^
+  -H:Name=constdin ^
+  --report-unsupported-elements-at-runtime ^
+  --initialize-at-build-time ^
+  --verbose
+```
+
+The first portion is preparing a jar of the code to pass to native-image.
+
+The second portion is the native-image invocation.
+
+Note this repository contains the built jar files for link:windows.jars[Windows] and a link:nix.jars[Linux distribution].
+
+The following is an attempt to provide details for reproducing the issue along with analogous steps for comparison with a Linux distribution.
+
+== Prerequisites
+
+* Windows 10, preferably as fresh an installation as possible
+* Windows SDK for Windows 7 (7.1)
+* Graal 19.1.0
+* Windows PowerShell 5.1, PowerShell Core 6.2.1, cmd.exe, Windows SDK 7.1 Command Prompt
+* Recent version of https://leiningen.org/[Leiningen]
+* Some Linux distribution to compare results
+
+== Windows Steps
+
+* Prep
+** Clone this repository
+** cd to cloned repository directory
+
+* Test of desired behavior
+** From the 4 shells: `type project.clj | lein constdin`
+** {blank} Observe results:
++
+----
+started
+finished
+----
+
+* Build native-image binary
+** Set GRAALVM_HOME environment variable appropriately
+** From "Windows SDK 7.1 Command Prompt": `windows-compile.bat`
+** Observe newly created constdin.exe in directory
+
+* Test native image
+** From the 4 shells: `type project.clj | .\constdin.exe`
+** {blank} Depending on the shell, the output may be different (currently on one machine, the PowerShell flavors give stacktraces, while the cmd.exe flavors don't (but which shells produce which output has varied across Windows installations, a number of Graal releases, and seemingly and different times).
++
+----
+started
+Exception in thread "System-2" java.io.IOException: The handle is invalid
+        at com.oracle.svm.jni.JNIJavaCallWrappers.jniInvoke_VA_LIST:Ljava_io_IOException_2_0002e_0003cinit_0003e_00028Ljava_lang_String_2_00029V(JNIJavaCallWrappers.java:0)
+        at java.io.FileInputStream.readBytes(FileInputStream.java)
+        at java.io.FileInputStream.read(FileInputStream.java:255)
+        at java.io.BufferedInputStream.read1(BufferedInputStream.java:284)
+        at java.io.BufferedInputStream.read(BufferedInputStream.java:345)
+        at sun.nio.cs.StreamDecoder.readBytes(StreamDecoder.java:284)
+        at sun.nio.cs.StreamDecoder.implRead(StreamDecoder.java:326)
+        at sun.nio.cs.StreamDecoder.read(StreamDecoder.java:178)
+        at java.io.InputStreamReader.read(InputStreamReader.java:184)
+        at java.io.BufferedReader.read1(BufferedReader.java:210)
+        at java.io.BufferedReader.read(BufferedReader.java:286)
+        at java.io.LineNumberReader.read(LineNumberReader.java:166)
+        at java.io.FilterReader.read(FilterReader.java:74)
+        at java.io.PushbackReader.read(PushbackReader.java:128)
+        at java.io.BufferedReader.fill(BufferedReader.java:161)
+        at java.io.BufferedReader.read1(BufferedReader.java:212)
+        at java.io.BufferedReader.read(BufferedReader.java:286)
+        at java.io.Reader.read(Reader.java:140)
+        at clojure.java.io$fn__11010.invokeStatic(io.clj:337)
+        at clojure.java.io$fn__11010.invoke(io.clj:334)
+        at clojure.lang.MultiFn.invoke(MultiFn.java:238)
+        at clojure.java.io$copy.invokeStatic(io.clj:406)
+        at clojure.java.io$copy.doInvoke(io.clj:391)
+        at clojure.lang.RestFn.invoke(RestFn.java:425)
+        at clojure.core$slurp.invokeStatic(core.clj:6871)
+        at clojure.core$slurp.doInvoke(core.clj:6862)
+        at clojure.lang.RestFn.invoke(RestFn.java:410)
+        at script$_main.invokeStatic(script.clj:5)
+        at script$_main.doInvoke(script.clj:4)
+        at clojure.lang.RestFn.invoke(RestFn.java:397)
+        at clojure.lang.AFn.applyToHelper(AFn.java:152)
+        at clojure.lang.RestFn.applyTo(RestFn.java:132)
+        at script.main(Unknown Source)
+----
+
+** {blank} It may also be necessary to press Enter a second time in which case the stacktrace may differ a bit:
++
+----
+Exception in thread "main" java.io.IOException: Incorrect function
+        at com.oracle.svm.jni.JNIJavaCallWrappers.jniInvoke_VA_LIST:Ljava_io_IOException_2_0002e_0003cinit_0003e_00028Ljava_lang_String_2_00029V(JNIJavaCallWrappers.java:0)
+        at java.io.FileInputStream.available0(FileInputStream.java)
+        at java.io.FileInputStream.available(FileInputStream.java:306)
+        at java.io.BufferedInputStream.read(BufferedInputStream.java:353)
+        at sun.nio.cs.StreamDecoder.readBytes(StreamDecoder.java:284)
+        at sun.nio.cs.StreamDecoder.implRead(StreamDecoder.java:326)
+        at sun.nio.cs.StreamDecoder.read(StreamDecoder.java:178)
+        at java.io.InputStreamReader.read(InputStreamReader.java:184)
+        at java.io.BufferedReader.read1(BufferedReader.java:210)
+        at java.io.BufferedReader.read(BufferedReader.java:286)
+        at java.io.LineNumberReader.read(LineNumberReader.java:166)
+        at java.io.FilterReader.read(FilterReader.java:74)
+        at java.io.PushbackReader.read(PushbackReader.java:128)
+        at java.io.BufferedReader.fill(BufferedReader.java:161)
+        at java.io.BufferedReader.read1(BufferedReader.java:212)
+        at java.io.BufferedReader.read(BufferedReader.java:286)
+        at java.io.Reader.read(Reader.java:140)
+        at clojure.java.io$fn__11010.invokeStatic(io.clj:337)
+        at clojure.java.io$fn__11010.invoke(io.clj:334)
+        at clojure.lang.MultiFn.invoke(MultiFn.java:238)
+        at clojure.java.io$copy.invokeStatic(io.clj:406)
+        at clojure.java.io$copy.doInvoke(io.clj:391)
+        at clojure.lang.RestFn.invoke(RestFn.java:425)
+        at clojure.core$slurp.invokeStatic(core.clj:6871)
+        at clojure.core$slurp.doInvoke(core.clj:6862)
+        at clojure.lang.RestFn.invoke(RestFn.java:410)
+        at script$_main.invokeStatic(script.clj:6)
+        at script$_main.doInvoke(script.clj:4)
+        at clojure.lang.RestFn.invoke(RestFn.java:397)
+        at clojure.lang.AFn.applyToHelper(AFn.java:152)
+        at clojure.lang.RestFn.applyTo(RestFn.java:132)
+        at script.main(Unknown Source)
+----
+
+== Linux Distribution Steps
+
+
+* Prep
+** Clone this repository
+** cd to cloned repository directory
+
+* Test of desired behavior
+** From bash: `cat project.clj | lein constdin`
+** {blank} Observe results
++
+----
+started
+finished
+----
+
+* Build native-image binary
+** Set GRAALVM_HOME environment variable appropriately
+** From bash: `sh nix-compile.sh`
+** Observe newly created constdin binary in directory
+
+* Test native image
+** From bash: `cat project.clj | ./constdin`
+** {blank} Output should match that of the "desired behavior" above
++
+----
+started
+finished
+----
